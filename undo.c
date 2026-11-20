@@ -215,6 +215,80 @@ void setafter_track( struct ahx_tune *at, int32 trk )
   clear_redolist( at );
 }
 
+/* One undo step for a rectangular edit, including channels sharing a track. */
+struct undonode *begin_track_region( struct ahx_tune *at, int32 left, int32 right )
+{
+  struct undonode *un;
+  struct udat_track_region *ud;
+  struct udat_region_track *tracks;
+  int32 ids[MAX_CHANNELS], count = 0, ch, i, track;
+
+  for( ch=left; ch<=right; ch++ )
+  {
+    track = at->at_Positions[at->at_PosNr].pos_Track[ch];
+    for( i=0; i<count; i++ ) if( ids[i] == track ) break;
+    if( i == count ) ids[count++] = track;
+  }
+  un = alloc_undonode( at, sizeof(*un)+sizeof(*ud)+count*sizeof(*tracks) );
+  if( !un ) return NULL;
+  ud = (struct udat_track_region *)&un[1];
+  tracks = (struct udat_region_track *)&ud[1];
+  un->un_type = UNT_TRACK_REGION;
+  un->un_data = ud;
+  ud->count = count;
+  ud->posnr = at->at_PosNr;
+  ud->notenr = at->at_NoteNr;
+  ud->tracked_curs = at->at_tracked_curs;
+  ud->curlch = at->at_curlch;
+  for( i=0; i<count; i++ )
+  {
+    tracks[i].track = ids[i];
+    memcpy( tracks[i].before, at->at_Tracks[ids[i]], sizeof(tracks[i].before) );
+  }
+  return un;
+}
+
+BOOL end_track_region( struct ahx_tune *at, struct undonode *un )
+{
+  struct udat_track_region *ud = (struct udat_track_region *)un->un_data;
+  struct udat_region_track *tracks = (struct udat_region_track *)&ud[1];
+  int32 i;
+  BOOL changed = FALSE;
+
+  for( i=0; i<ud->count; i++ )
+  {
+    memcpy( tracks[i].after, at->at_Tracks[tracks[i].track], sizeof(tracks[i].after) );
+    if( memcmp( tracks[i].before, tracks[i].after, sizeof(tracks[i].before) ) )
+      changed = TRUE;
+  }
+  if( !changed )
+  {
+    at->at_undomem -= un->un_size;
+    IExec->FreeSysObject( ASOT_NODE, un );
+    return FALSE;
+  }
+  IExec->AddTail( at->at_undolist, (struct Node *)un );
+  clear_redolist( at );
+  at->at_modified = TRUE;
+  return TRUE;
+}
+
+static void restore_track_region( struct ahx_tune *at, struct undonode *un, BOOL after )
+{
+  struct udat_track_region *ud = (struct udat_track_region *)un->un_data;
+  struct udat_region_track *tracks = (struct udat_region_track *)&ud[1];
+  int32 i;
+
+  for( i=0; i<ud->count; i++ )
+    memcpy( at->at_Tracks[tracks[i].track], after ? tracks[i].after : tracks[i].before,
+            sizeof(tracks[i].before) );
+  at->at_PosNr = ud->posnr;
+  at->at_NoteNr = ud->notenr;
+  at->at_tracked_curs = ud->tracked_curs;
+  at->at_curlch = ud->curlch;
+  trked_lastposnr = 1000;
+}
+
 void setbefore_string( struct ahx_tune *at, TEXT *ptr )
 {
   if( ptr == NULL ) return;
@@ -279,6 +353,10 @@ void setafter_plist( struct ahx_tune *at, struct ahx_plsentry *ptr )
   un->un_data       = ud;
   ud->ptr           = ptr;
   ud->insnum        = at->at_curins;
+
+  ud->pcurx = at->at_Instruments[at->at_curins].ins_pcurx;
+  ud->pcury = at->at_Instruments[at->at_curins].ins_pcury;
+  ud->ptop = at->at_Instruments[at->at_curins].ins_ptop;
 
   for( i=0; i<256; i++ )
   {
@@ -1137,6 +1215,9 @@ void undo( struct ahx_tune *at )
     case UNT_PLE:
       whole_plist = (struct udat_whole_plist *)un->un_data;
       for( i=0; i<256; i++ ) whole_plist->ptr[i] = whole_plist->before[i];
+      at->at_Instruments[whole_plist->insnum].ins_pcurx = whole_plist->pcurx;
+      at->at_Instruments[whole_plist->insnum].ins_pcury = whole_plist->pcury;
+      at->at_Instruments[whole_plist->insnum].ins_ptop = whole_plist->ptop;
       wpanel = PN_INSED;
       perf_lastinst = NULL;
       at->at_curins = whole_plist->insnum;
@@ -1357,6 +1438,12 @@ void undo( struct ahx_tune *at )
       at->at_curlch       = rtrk->curlch;
       wpanel = PN_TRACKER;
       trked_lastposnr = 1000;
+      break;
+
+    case UNT_TRACK_REGION:
+      restore_track_region( at, un, FALSE );
+      wpanel = PN_TRACKER;
+      forceall = TRUE;
       break;
 
     case UNT_STP_NOTEANDINS:
@@ -1636,6 +1723,9 @@ void redo( struct ahx_tune *at )
     case UNT_PLE:
       whole_plist = (struct udat_whole_plist *)un->un_data;
       for( i=0; i<256; i++ ) whole_plist->ptr[i] = whole_plist->after[i];
+      at->at_Instruments[whole_plist->insnum].ins_pcurx = whole_plist->pcurx;
+      at->at_Instruments[whole_plist->insnum].ins_pcury = whole_plist->pcury;
+      at->at_Instruments[whole_plist->insnum].ins_ptop = whole_plist->ptop;
       wpanel = PN_INSED;
       perf_lastinst = NULL;
       at->at_curins = whole_plist->insnum;
@@ -1856,6 +1946,12 @@ void redo( struct ahx_tune *at )
       at->at_curlch       = rtrk->curlch;
       wpanel = PN_TRACKER;
       trked_lastposnr = 1000;
+      break;
+
+    case UNT_TRACK_REGION:
+      restore_track_region( at, un, TRUE );
+      wpanel = PN_TRACKER;
+      forceall = TRUE;
       break;
 
     case UNT_STP_NOTEANDINS:

@@ -18,6 +18,7 @@ TARGET = hivelytracker
 OBJECTS = sdl_wrapper.o \
           ht.o \
 	  ../gui.o \
+	  ../editor.o \
 	  ../replay.o \
 	  ../util.o \
 	  ../undo.o \

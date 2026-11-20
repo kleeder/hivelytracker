@@ -20,6 +20,7 @@ OBJECTS = sdl_wrapper.o \
           ht.o \
 	  win32.o \
 	  ../gui.o \
+	  ../editor.o \
 	  ../replay.o \
 	  ../util.o \
 	  ../undo.o \

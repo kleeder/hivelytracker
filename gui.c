@@ -19,6 +19,7 @@
 #include "util.h"
 #include "about.h"
 #include "undo.h"
+#include "editor.h"
 #ifdef __APPLE__
 char *osxGetPrefsPath(void);
 char *osxGetResourcesPath(char *, const char*);
@@ -468,6 +469,15 @@ struct czone      zones[MAX_ZONES], pzones[MAX_PZONES];
 struct numberbox  trk_nb[NB_END], ins_nb[INB_END];
 struct textbox    tbx[TB_END], ptb[PTB_END];
 struct textbox   *etbx = NULL, *ptbx = NULL;
+static int32 editing_number = -1;
+static TEXT number_input[8];
+static int32 number_cursor = 0;
+static BOOL number_replace = FALSE;
+static BOOL suppress_escape_up = FALSE;
+static BOOL editor_drag = FALSE, editor_drag_perf = FALSE;
+static int32 editor_drag_top, editor_drag_note;
+static struct ahx_tune *editor_drag_tune = NULL;
+static void gui_render_editor( BOOL perf );
 struct popup      pp[PP_END];
 struct tunetab    ttab[8];
 struct buttonbank bbank[16];
@@ -1101,6 +1111,17 @@ void gui_render_nbox( struct ahx_tune *at, int32 panel, struct numberbox *nb )
     default:
       sprintf( pbuf, nb->fmt, nb->cnum );
   }
+  if( panel == PN_INSED && editing_number >= 0 && nb == &ins_nb[editing_number] )
+  {
+    strcpy( pbuf, number_input );
+    set_fpen( &mainbm, PAL_BARMID );
+    if( number_replace )
+      fillrect_xy( &mainbm, nb->x+4, nb->y, nb->x+nb->w-29, nb->y+15 );
+    else
+      fillrect_xy( &mainbm, nb->x+4+number_cursor*8, nb->y,
+                   nb->x+11+number_cursor*8, nb->y+15 );
+    set_fpen( &mainbm, PAL_TEXT );
+  }
   printstr(&mainbm, pbuf, nb->x+4, nb->y);
 
   put_partbitmap( BM_PLUSMINUS, 0, 0, nb->x+nb->w-28, nb->y-1, 28, 19 );
@@ -1160,6 +1181,25 @@ void gui_render_tbox( struct rawbm *bm, struct textbox *tb )
   bm_to_bm(&tb->bm, 0, 0, bm, tb->x, tb->y, tb->w, 16);
 }
 
+static void gui_render_selection( struct ahx_tune *at, BOOL perf, int32 row, const TEXT *text, int32 y )
+{
+  static const int32 offsets[2][6] = { {3,7,10,11,14,15}, {4,9,11,12,15,16} };
+  static const int32 widths[2][6] = { {3,2,1,2,1,2}, {4,1,1,2,1,2} };
+  struct rawbm *bm = &bitmaps[perf ? BM_PERF : BM_TRACKED];
+  int32 ch, field, offset, count = perf ? 1 : at->at_Channels-at->at_curlch;
+  int32 fpen = bm->fpen, bpen = bm->bpen;
+  if( count > 6 ) count = 6;
+  for( ch=0; ch<count; ch++ )
+    for( field=0; field<EDITOR_FIELDS; field++ )
+      if( editor_selected(at, perf, (perf ? 0 : (ch+at->at_curlch)*EDITOR_FIELDS)+field, row) )
+      {
+        offset = offsets[perf ? 1 : 0][field]+(perf ? 0 : ch*15);
+        set_pens( bm, PAL_BACK, PAL_TEXT );
+        printstrlen( bm, &text[offset], widths[perf ? 1 : 0][field], offset*8, y );
+      }
+  set_pens( bm, fpen, bpen );
+}
+
 void gui_render_perf( struct ahx_tune *at, struct ahx_instrument *ins, BOOL force )
 {
   TEXT pbuf[32];
@@ -1173,6 +1213,8 @@ void gui_render_perf( struct ahx_tune *at, struct ahx_instrument *ins, BOOL forc
     perf_lastinst = NULL;
     return;
   }
+
+  if( editor_selection(at, TRUE)->active ) force = TRUE;
 
   if( ins->ins_pcury < 0 ) ins->ins_pcury = 0;
   if( ins->ins_pcury > 254 ) ins->ins_pcury = 254;
@@ -1237,6 +1279,7 @@ void gui_render_perf( struct ahx_tune *at, struct ahx_instrument *ins, BOOL forc
       ins->ins_PList.pls_Entries[j].ple_FXParam[1]&0xff );
 
     printstr(&bitmaps[BM_PERF], pbuf, 0, (i*16)+4);
+    gui_render_selection( at, TRUE, j, pbuf, (i*16)+4 );
   }
 
   if( k >= 0 )
@@ -1976,6 +2019,7 @@ void gui_render_tracked( BOOL force )
   at = curtune;
   if( at )
   {
+    if( editor_selection(at, FALSE)->active ) force = TRUE;
     if( at->at_cbmarktrack != -1 )
     {
       if( ( at->at_doing == D_EDITING ) || ( at->at_doing == D_IDLE ) )
@@ -2020,7 +2064,8 @@ void gui_render_tracked( BOOL force )
     }
   
     posnr  = at->at_PosNr;
-    notenr = at->at_NoteNr;
+    notenr = (editor_drag && !editor_drag_perf && editor_drag_tune == at) ?
+             editor_drag_note : at->at_NoteNr;
     trklen = at->at_TrackLength;
     trkmax = trklen-1;
     dch    = at->at_Channels;
@@ -2271,6 +2316,8 @@ void gui_render_tracked( BOOL force )
           }
           printstr(&bitmaps[BM_TRACKED], pbuf, 0, j);
           
+          gui_render_selection( at, FALSE, i, pbuf, j );
+
           if( at->at_cbmarktrack != -1 )
           {
             needrestore = FALSE;
@@ -2380,7 +2427,7 @@ void gui_render_tracked( BOOL force )
       set_fpen(&bitmaps[BM_TRACKED], PAL_CURSNORM);
     
     cx = tracked_xoff[at->at_tracked_curs]-2;
-    cy = 8*16-2;
+    cy = (at->at_NoteNr-notenr+8)*16-2;
     mx = cx+8+3;
     my = cy+16+3;
 
@@ -3795,7 +3842,8 @@ BOOL gui_open( void )
     WA_Borderless,  TRUE,
     WA_ScreenTitle, "HivelyTracker (c)2022 IRIS & Up Rough! - http://www.uprough.net - http://www.hivelytracker.co.uk",
     WA_RMBTrap,     TRUE,
-    WA_IDCMP,       IDCMP_MOUSEBUTTONS|IDCMP_RAWKEY|IDCMP_GADGETUP|IDCMP_EXTENDEDMOUSE,
+    WA_IDCMP,       IDCMP_MOUSEBUTTONS|IDCMP_MOUSEMOVE|IDCMP_RAWKEY|IDCMP_GADGETUP|IDCMP_EXTENDEDMOUSE,
+    WA_ReportMouse, TRUE,
     WA_Activate,    TRUE,
     WA_Gadgets,     fullscr ? NULL : &gad_drag,
     fullscr ? WA_CustomScreen : TAG_IGNORE, scr,
@@ -4280,6 +4328,8 @@ void gui_pasteposregion( struct ahx_tune *at )
 void gui_copyregion( int16 track, int16 start, int16 end, int16 toclip, BOOL cutting )
 {
   int32 i;
+
+  editor_forget_clipboard( FALSE );
 
   for( i=start; i<=end; i++ )
   {
@@ -5005,6 +5055,12 @@ BOOL gui_check_bbank( struct buttonbank *bbnk, int32 nb, int32 z, int32 button )
     case BBA_CUTTRK:
       cutting = TRUE;
     case BBA_COPYTRK:
+      if( curtune && editor_selection(curtune, FALSE)->active )
+      {
+        editor_copy( curtune, FALSE, cutting );
+        gui_render_editor( FALSE );
+        break;
+      }
       if( curtune->at_cbmarktrack != -1 )
       {
         gui_copyregion( curtune->at_cbmarktrack, curtune->at_cbmarkstartnote, curtune->at_cbmarkendnote, curtune->at_cbmarkbits, cutting );
@@ -5033,6 +5089,12 @@ BOOL gui_check_bbank( struct buttonbank *bbnk, int32 nb, int32 z, int32 button )
       break;
     
     case BBA_PASTE:
+      if( curtune && editor_has_clipboard(FALSE) )
+      {
+        editor_paste( curtune, FALSE );
+        gui_render_editor( FALSE );
+        break;
+      }
       if( curtune->at_cbmarktrack != -1 ) curtune->at_cbmarktrack = -1;
       if( track == -1 ) break;
 
@@ -5365,6 +5427,142 @@ void gui_tbox_finish_editing( void )
   etbx = NULL;
 }
 
+static void gui_finish_number( BOOL commit )
+{
+  int32 index = editing_number, value, old, wavelength;
+  struct numberbox *nb;
+  if( index < 0 ) return;
+  nb = &ins_nb[index];
+  editing_number = -1;
+  if( commit && number_input[0] )
+  {
+    value = strtol( number_input, NULL, (nb->flags & NBF_WAVELEN) ? 16 : 10 );
+    if( nb->flags & NBF_WAVELEN )
+    {
+      /* The wavelength is displayed as its hexadecimal length, not its index. */
+      wavelength = 0;
+      while( wavelength < nb->max && (4L<<wavelength) < value ) wavelength++;
+      value = wavelength;
+    }
+    old = nb->cnum;
+    if( value < nb->min ) value = nb->min;
+    if( value > nb->max ) value = nb->max;
+    if( value != old )
+    {
+      nb->cnum = value;
+      gui_update_from_nbox( PN_INSED, ins_nb, index );
+      if( index != INB_INS ) curtune->at_modified = TRUE;
+    }
+  }
+  gui_render_nbox( curtune, PN_INSED, nb );
+}
+
+static void gui_start_number( int32 index )
+{
+  struct numberbox *nb = &ins_nb[index];
+  editing_number = index;
+  if( nb->flags & NBF_WAVELEN ) sprintf( number_input, "%02X", (int)(4L<<nb->cnum) );
+  else sprintf( number_input, "%d", (int)nb->cnum );
+  number_cursor = strlen(number_input);
+  number_replace = TRUE;
+  gui_render_nbox( curtune, PN_INSED, nb );
+}
+
+static BOOL gui_number_press( int16 x, int16 y )
+{
+  int32 i;
+  if( !curtune || curtune->at_curpanel != PN_INSED ) return FALSE;
+  for( i=0; i<INB_END; i++ )
+    if( x >= ins_nb[i].x && x < ins_nb[i].x+ins_nb[i].w-28 &&
+        y >= ins_nb[i].y && y < ins_nb[i].y+ins_nb[i].h &&
+        (ins_nb[i].flags & NBF_ENABLED) &&
+        ((ins_nb[i].flags & NBF_UDDURINGPLAY) || curtune->at_doing != D_PLAYING) )
+    {
+      if( editing_number != i )
+      {
+        gui_finish_number( TRUE );
+        gui_start_number( i );
+      } else {
+        number_replace = FALSE;
+        number_cursor = (x-ins_nb[i].x-4)/8;
+        if( number_cursor < 0 ) number_cursor = 0;
+        if( number_cursor > (int32)strlen(number_input) ) number_cursor = strlen(number_input);
+        gui_render_nbox( curtune, PN_INSED, &ins_nb[i] );
+      }
+      return TRUE;
+    }
+  return FALSE;
+}
+
+static void gui_number_key( struct IntuiMessage *msg )
+{
+  static const int32 digitkeys[] = { 10,1,2,3,4,5,6,7,8,9,32,53,51,34,18,35 };
+  static const int32 keypadkeys[] = { 15,29,30,31,45,46,47,61,62,63 };
+  int32 i, len, key = msg->Code, index = editing_number;
+  BOOL shift = (msg->Qualifier & (IEQUALIFIER_LSHIFT|IEQUALIFIER_RSHIFT)) != 0;
+  if( key >= 128 ) return;
+  len = strlen(number_input);
+  switch( key )
+  {
+    case 68: gui_finish_number( TRUE ); return;
+    case 69:
+      suppress_escape_up = TRUE;
+      gui_finish_number( FALSE );
+      return;
+    case 66:
+      gui_finish_number( TRUE );
+      for( i=0; i<INB_END; i++ )
+      {
+        index = (index+INB_END+(shift ? -1 : 1))%INB_END;
+        if( (ins_nb[index].flags & NBF_ENABLED) &&
+            ((ins_nb[index].flags & NBF_UDDURINGPLAY) || curtune->at_doing != D_PLAYING) )
+        {
+          gui_start_number( index );
+          return;
+        }
+      }
+      return;
+    case 79:
+      if( number_cursor > 0 ) number_cursor--;
+      number_replace = FALSE;
+      break;
+    case 78:
+      if( number_cursor < len ) number_cursor++;
+      number_replace = FALSE;
+      break;
+    case 65:
+    case 70:
+      if( number_replace )
+      {
+        number_input[0] = 0;
+        number_cursor = 0;
+      } else if( key == 65 && number_cursor > 0 ) {
+        memmove( &number_input[number_cursor-1], &number_input[number_cursor], len-number_cursor+1 );
+        number_cursor--;
+      } else if( key == 70 && number_cursor < len ) {
+        memmove( &number_input[number_cursor], &number_input[number_cursor+1], len-number_cursor );
+      }
+      number_replace = FALSE;
+      break;
+    default:
+      if( msg->Qualifier & (IEQUALIFIER_CONTROL|IEQUALIFIER_LALT|IEQUALIFIER_LCOMMAND) ) return;
+      for( i=0; i<16; i++ )
+        if( key == digitkeys[i] || (i < 10 && key == keypadkeys[i]) ) break;
+      if( i == 16 || (i > 9 && !(ins_nb[index].flags & NBF_WAVELEN)) ) return;
+      if( number_replace )
+      {
+        number_cursor = len = 0;
+        number_input[0] = 0;
+      }
+      number_replace = FALSE;
+      if( len >= ((ins_nb[index].flags & NBF_WAVELEN) ? 2 : 3) ) break;
+      memmove( &number_input[number_cursor+1], &number_input[number_cursor], len-number_cursor+1 );
+      number_input[number_cursor++] = "0123456789ABCDEF"[i];
+      break;
+  }
+  gui_render_nbox( curtune, PN_INSED, &ins_nb[index] );
+}
+
 BOOL gui_check_tbox_press( int16 x, int16 y )
 {
   int32 i;
@@ -5552,6 +5750,164 @@ BOOL gui_maybe_quit( void )
   return gui_req( REQIMAGE_QUESTION, "HivelyTracker", "Are you sure you want to quit?", "_Yep!|Arrgh.. _No!" );
 }
 
+static void gui_render_editor( BOOL perf )
+{
+  if( perf ) gui_render_perf( curtune, &curtune->at_Instruments[curtune->at_curins], TRUE );
+  else gui_render_tracker( TRUE );
+}
+
+static BOOL gui_editor_hit( int16 x, int16 y, BOOL perf, int32 *col, int32 *row, int32 *digit )
+{
+  static const int32 track_digits[] = {0,0,0,0,1,2,2,3,4,5,5,6,7,8,8};
+  static const int32 perf_digits[] = {0,0,0,0,0,1,1,2,3,4,4,5,6,7,7};
+  static const int32 track_fields[] = {0,1,1,2,3,3,4,5,5};
+  static const int32 perf_fields[] = {0,1,2,3,3,4,5,5};
+  int32 ch, character, origin;
+  if( !curtune ) return FALSE;
+  if( perf )
+  {
+    if( x < PERF_X+32 || x >= PERF_X+PERF_W || y < PERF_Y ||
+        y >= PERF_Y+4+(PERF_H>>4)*16 ) return FALSE;
+    character = (x-PERF_X-32)/8;
+    *digit = perf_digits[character];
+    *col = perf_fields[*digit];
+    origin = editor_drag ? editor_drag_top : curtune->at_Instruments[curtune->at_curins].ins_ptop;
+    *row = origin+(y-PERF_Y < 4 ? 0 : (y-PERF_Y-4)/16);
+    if( *row > 254 ) return FALSE;
+  } else {
+    if( x < TRACKED_X+24 || x >= TRACKED_X+TRACKED_W || y < TRACKED_Y || y >= TRACKED_Y+TRACKED_H ) return FALSE;
+    ch = (x-TRACKED_X-24)/120+curtune->at_curlch;
+    if( ch >= curtune->at_Channels ) return FALSE;
+    character = ((x-TRACKED_X-24)%120)/8;
+    *digit = track_digits[character];
+    *col = ch*EDITOR_FIELDS+track_fields[*digit];
+    origin = editor_drag ? editor_drag_note : curtune->at_NoteNr;
+    *row = origin+(y-TRACKED_Y)/16-8;
+    if( *row < 0 || *row >= curtune->at_TrackLength ) return FALSE;
+  }
+  return TRUE;
+}
+
+static BOOL gui_editor_press( int16 x, int16 y )
+{
+  int32 col, row, digit;
+  BOOL perf;
+  if( !curtune || (curtune->at_doing != D_IDLE && curtune->at_doing != D_EDITING) ) return FALSE;
+  perf = curtune->at_curpanel == PN_INSED;
+  if( !gui_editor_hit(x, y, perf, &col, &row, &digit) ) return FALSE;
+  editor_drag = TRUE;
+  editor_drag_perf = perf;
+  editor_drag_tune = curtune;
+  editor_drag_top = curtune->at_Instruments[curtune->at_curins].ins_ptop;
+  editor_drag_note = curtune->at_NoteNr;
+  cz_lmb = -1;
+  editor_select( curtune, perf, col, row, (qual & (IEQUALIFIER_LSHIFT|IEQUALIFIER_RSHIFT)) != 0 );
+  if( perf ) curtune->at_Instruments[curtune->at_curins].ins_pcurx = digit;
+  else curtune->at_tracked_curs = (col/EDITOR_FIELDS-curtune->at_curlch)*9+digit;
+  gui_render_editor( perf );
+  return TRUE;
+}
+
+static void gui_editor_motion( int16 x, int16 y )
+{
+  int32 col, row, digit;
+  if( !editor_drag || !curtune ) return;
+  if( editor_drag_tune != curtune || (curtune->at_curpanel == PN_INSED) != editor_drag_perf )
+  {
+    editor_drag = FALSE;
+    return;
+  }
+  if( gui_editor_hit(x, y, editor_drag_perf, &col, &row, &digit) )
+  {
+    editor_select( curtune, editor_drag_perf, col, row, TRUE );
+    if( editor_drag_perf ) curtune->at_Instruments[curtune->at_curins].ins_pcurx = digit;
+    else curtune->at_tracked_curs = (col/EDITOR_FIELDS-curtune->at_curlch)*9+digit;
+    gui_render_editor( editor_drag_perf );
+  }
+}
+
+static BOOL gui_editor_key( struct IntuiMessage *msg )
+{
+  BOOL perf, shift;
+  int32 col, row, key = msg->Code;
+  struct editor_selection *sel;
+  uint32 modifiers = msg->Qualifier & (IEQUALIFIER_CONTROL|IEQUALIFIER_LSHIFT|IEQUALIFIER_RSHIFT|IEQUALIFIER_LALT|IEQUALIFIER_LCOMMAND);
+  if( !curtune || key >= 128 ) return FALSE;
+  perf = curtune->at_curpanel == PN_INSED;
+  if( !perf && curtune->at_editing != E_TRACK ) return FALSE;
+  if( modifiers & (IEQUALIFIER_LALT|IEQUALIFIER_LCOMMAND) ) return FALSE;
+  shift = (modifiers & (IEQUALIFIER_LSHIFT|IEQUALIFIER_RSHIFT)) != 0;
+  sel = editor_selection( curtune, perf );
+  if( modifiers & IEQUALIFIER_CONTROL )
+  {
+    switch( key )
+    {
+      case 16: /* Ctrl+Q / Ctrl+Shift+Q */
+      case 32: /* Ctrl+A / Ctrl+Shift+A */
+        editor_adjust( curtune, perf, (key == 16 ? 1 : -1)*(shift ? 12 : 1), TRUE );
+        break;
+      case 50: /* Ctrl+X */
+      case 51: /* Ctrl+C */
+        if( !perf && !sel->active && curtune->at_cbmarktrack != -1 ) return FALSE;
+        editor_copy( curtune, perf, key == 50 );
+        break;
+      case 52: /* Ctrl+V; keep the classic clipboard available for classic shortcuts. */
+        if( !editor_has_clipboard(perf) ) return FALSE;
+        editor_paste( curtune, perf );
+        break;
+      case 53: /* The classic Ctrl+B mark replaces the field selection. */
+        sel->active = FALSE;
+        gui_render_editor( perf );
+        return FALSE;
+      default: return FALSE;
+    }
+    gui_render_editor( perf );
+    return TRUE;
+  }
+  if( key >= 76 && key <= 79 )
+  {
+    if( !shift )
+    {
+      if( sel->active )
+      {
+        sel->active = FALSE;
+        gui_render_editor( perf );
+      }
+      return FALSE;
+    }
+    if( curtune->at_doing != D_IDLE && curtune->at_doing != D_EDITING ) return TRUE;
+    col = editor_column(curtune, perf);
+    row = editor_row(curtune, perf);
+    if( key == 76 ) row--;
+    if( key == 77 ) row++;
+    if( key == 79 ) col--;
+    if( key == 78 ) col++;
+    editor_select( curtune, perf, col, row, TRUE );
+    gui_render_editor( perf );
+    return TRUE;
+  }
+  if( key == 69 && sel->active )
+  {
+    suppress_escape_up = TRUE;
+    sel->active = FALSE;
+    gui_render_editor( perf );
+    return TRUE;
+  }
+  if( key == 70 && sel->active )
+  {
+    editor_clear( curtune, perf );
+    gui_render_editor( perf );
+    return TRUE;
+  }
+  /* A normal edit or navigation starts a fresh selection at the new cursor. */
+  if( (key < 64 || key == 65 || key == 66 || key == 68) && sel->active )
+  {
+    sel->active = FALSE;
+    gui_render_editor( perf );
+  }
+  return FALSE;
+}
+
 void gui_wheelybin( int16 mousex, int16 mousey, int16 wheeldir )
 {
   int32 i, chan;
@@ -5560,6 +5916,19 @@ void gui_wheelybin( int16 mousex, int16 mousey, int16 wheeldir )
 
   if( wheeldir == 0 ) return;
   if( !curtune ) return;
+
+  if( editing_number >= 0 ) gui_finish_number( TRUE );
+  if( qual & IEQUALIFIER_CONTROL )
+  {
+    BOOL perf = curtune->at_curpanel == PN_INSED;
+    if( (perf && mousex >= PERF_X && mousex < PERF_X+PERF_W && mousey >= PERF_Y && mousey < PERF_Y+PERF_H) ||
+        (!perf && mousex >= TRACKED_X && mousex < TRACKED_X+TRACKED_W && mousey >= TRACKED_Y && mousey < TRACKED_Y+TRACKED_H) )
+    {
+      editor_adjust( curtune, perf, -wheeldir, FALSE );
+      gui_render_editor( perf );
+      return;
+    }
+  }
 
   switch( curtune->at_curpanel )
   {
@@ -5718,6 +6087,11 @@ void gui_mouse_handler( int16 x, int16 y, uint32 code )
   switch( code )
   {
     case SELECTDOWN:
+      if( editing_number >= 0 )
+      {
+        if( gui_number_press( x, y ) ) return;
+        gui_finish_number( TRUE );
+      }
       if( gui_check_tbox_press( x, y ) ) return;
       
       if( etbx )
@@ -5725,8 +6099,10 @@ void gui_mouse_handler( int16 x, int16 y, uint32 code )
         etbx->flags &= ~TBF_ACTIVE;
         gui_render_tbox( &mainbm, etbx );
         gui_tbox_finish_editing();
-        return;
       }
+
+      if( gui_number_press( x, y ) ) return;
+      if( gui_editor_press( x, y ) ) return;
       
       if( ( curtune ) && ( curtune->at_curpanel == PN_TRACKER ) )
       {
@@ -5833,6 +6209,14 @@ void gui_mouse_handler( int16 x, int16 y, uint32 code )
       }
       break;
     case SELECTUP:
+      if( editor_drag )
+      {
+        gui_editor_motion( x, y );
+        editor_drag = FALSE;
+        gui_render_editor( editor_drag_perf );
+        return;
+      }
+      if( editing_number >= 0 ) break;
       if( etbx != NULL ) break;
 
       if( gui_check_nbox_butrelease( x, y ) )
@@ -5952,19 +6336,6 @@ void gui_mouse_handler( int16 x, int16 y, uint32 code )
           gui_set_various_things( curtune );
         }
 
-        if( ( x >= PERF_X ) && ( x < (PERF_X+PERF_W) ) &&
-            ( y >= PERF_Y ) && ( y < (PERF_Y+PERF_H) ) )
-        {
-          int32 i;
-          struct ahx_instrument *cins;
-
-          cins = &curtune->at_Instruments[curtune->at_curins];
-          
-          i = (y-(PERF_Y+4))>>4;
-          if( i < 0 ) i = 0;
-          cins->ins_pcury = i+cins->ins_ptop;
-          gui_set_various_things( curtune );
-        }
       }
       break;
     case MENUDOWN:
@@ -6527,9 +6898,20 @@ struct IntuiMessage *translate_sdl_event(void)
   static struct IntuiMessage fakemsg;
 
   fakemsg.IAddress  = NULL;
+  fakemsg.Class = 0;
+  fakemsg.Code = 0;
+  fakemsg.Qualifier = mkqual;
 
   switch (event.type)
   {
+    case SDL_ACTIVEEVENT:
+      if( !event.active.gain && (event.active.state & SDL_APPINPUTFOCUS) )
+      {
+        mkqual = 0;
+        qual = 0;
+        editor_drag = FALSE;
+      }
+      break;
     case SDL_MOUSEMOTION:
       fakemsg.Class     = IDCMP_MOUSEMOVE;
       fakemsg.Qualifier = mkqual;
@@ -6777,7 +7159,12 @@ void gui_handler( uint32 gotsigs )
 
       switch( msg->Class )
       {
+        case IDCMP_MOUSEMOVE:
+          qual = msg->Qualifier;
+          gui_editor_motion( msg->MouseX, msg->MouseY );
+          break;
         case IDCMP_EXTENDEDMOUSE:
+          qual = msg->Qualifier;
           switch( msg->Code )
           {
             case IMSGCODE_INTUIWHEELDATA:
@@ -6789,6 +7176,12 @@ void gui_handler( uint32 gotsigs )
         case IDCMP_RAWKEY:
           qual   = msg->Qualifier;
           donkey = FALSE;
+
+          if( msg->Code == 197 && suppress_escape_up )
+          {
+            suppress_escape_up = FALSE;
+            break;
+          }
           
           // In a textbox?
           if( etbx != NULL )
@@ -6796,6 +7189,13 @@ void gui_handler( uint32 gotsigs )
             gui_textbox_keypress( &mainbm, &etbx, msg );
             break;
           }
+
+          if( editing_number >= 0 )
+          {
+            gui_number_key( msg );
+            break;
+          }
+          if( gui_editor_key( msg ) ) break;
           
           // Keys for any mode
           switch( qual&(IEQUALIFIER_LSHIFT|IEQUALIFIER_RSHIFT|IEQUALIFIER_CONTROL|IEQUALIFIER_LALT|IEQUALIFIER_LCOMMAND) )

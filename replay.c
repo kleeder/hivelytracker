@@ -391,6 +391,8 @@ void rp_clear_tune( struct ahx_tune *at )
   at->at_mixgainP        = defgain[pref_defstereo];
 
   at->at_cbmarktrack     = -1;
+  at->at_pattern_selection.active = FALSE;
+  at->at_perf_selection.active = FALSE;
   at->at_cbmarkstartnote = -1;
   at->at_cbmarkendnote   = -1;
   at->at_cbmarkleftx     = 0;

@@ -46,6 +46,7 @@ enum
   UNT_INS_HARDCUTRELEASEFRAMES,    
 
   UNT_TRACK,
+  UNT_TRACK_REGION,
 
   UNT_STP_NOTE,
   UNT_STP_INSTRUMENT,
@@ -178,8 +179,21 @@ struct udat_whole_plist
 {
   struct ahx_plsentry *ptr;
   int32 insnum;
+  int32 pcurx, pcury, ptop;
   struct ahx_plsentry before[256];
   struct ahx_plsentry after[256];
+};
+
+struct udat_region_track
+{
+  int32 track;
+  struct ahx_step before[64], after[64];
+};
+
+struct udat_track_region
+{
+  int32 count, posnr, notenr, tracked_curs, curlch;
+  /* Followed by count udat_region_track structures. */
 };
 
 struct udat_string
@@ -213,6 +227,8 @@ void setbefore_posregion( struct ahx_tune *at, int32 left, int32 pos, int32 chan
 void setafter_posregion( struct ahx_tune *at, int32 left, int32 pos, int32 chans, int32 rows );
 void setbefore_track( struct ahx_tune *at, int32 trk );
 void setafter_track( struct ahx_tune *at, int32 trk );
+struct undonode *begin_track_region( struct ahx_tune *at, int32 left, int32 right );
+BOOL end_track_region( struct ahx_tune *at, struct undonode *un );
 void setbefore_plist( struct ahx_tune *at, struct ahx_plsentry *ptr );
 void setafter_plist( struct ahx_tune *at, struct ahx_plsentry *ptr );
 void setbefore_string( struct ahx_tune *at, TEXT *ptr );

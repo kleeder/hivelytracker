@@ -20,6 +20,7 @@ OBJECTS = sdl_wrapper.o \
           ht.o \
 	  linux.o \
 	  ../gui.o \
+	  ../editor.o \
 	  ../replay.o \
 	  ../util.o \
 	  ../undo.o \

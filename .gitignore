@@ -1,6 +1,8 @@
 *.o
 *.d
 *.exe
+/tests/editor_test
+/dist/
 # ignore Xcode/Apple stuff
 .DS_Store
 *.swp

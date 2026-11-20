@@ -182,6 +182,15 @@ struct ahx_voice
   int8                   vc_RingVoiceBuffer[0x282*4];
 };
 
+/* Logical editor fields, independent of the digit used for keyboard entry. */
+struct editor_selection
+{
+  BOOL active;
+  int32 context;             /* Position or instrument owning the selection. */
+  int32 anchor_col, anchor_row;
+  int32 col, row;
+};
+
 // Store all tunes in a list so we can have more than
 // one loaded at once (= tabs!)
 struct ahx_tune
@@ -281,6 +290,9 @@ struct ahx_tune
   int32                  at_doing;
   int32                  at_editing;
   int32                  at_idoing;
+
+  struct editor_selection at_pattern_selection;
+  struct editor_selection at_perf_selection;
 
   // Undo stuff
   struct ahx_plsentry    at_rem_pls_Entries[256];

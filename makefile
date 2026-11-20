@@ -9,14 +9,17 @@ LFLAGS = -lm
 
 all: ht
 
-ht: ht.o gui.o util.o replay.o about.o undo.o
-	$(CC) -o ht ht.o gui.o util.o replay.o about.o undo.o $(LFLAGS)
+ht: ht.o gui.o editor.o util.o replay.o about.o undo.o
+	$(CC) -o ht ht.o gui.o editor.o util.o replay.o about.o undo.o $(LFLAGS)
 
 ht.o: ht.c gui.h replay.h about.h
 	$(CC) -c ht.c -o ht.o $(CFLAGS)
 
-gui.o: gui.c gui.h util.h replay.h
+gui.o: gui.c gui.h editor.h util.h replay.h
 	$(CC) -c gui.c -o gui.o $(CFLAGS)
+
+editor.o: editor.c editor.h replay.h gui.h undo.h
+	$(CC) -c editor.c -o editor.o $(CFLAGS)
 
 util.o: util.c util.h
 	$(CC) -c util.c -o util.o $(CFLAGS)

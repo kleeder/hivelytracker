@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        ED1700010000000000000001 /* editor.c in Sources */ = {isa = PBXBuildFile; fileRef = ED1700010000000000000002 /* editor.c */; };
 		002F3A2E09D0888800EBEB88 /* SDLMain.m in Sources */ = {isa = PBXBuildFile; fileRef = 002F3A2C09D0888800EBEB88 /* SDLMain.m */; };
 		830D2602163DCF880045F28B /* NSFileManager+DirectoryLocations.m in Sources */ = {isa = PBXBuildFile; fileRef = 830D2601163DCF880045F28B /* NSFileManager+DirectoryLocations.m */; };
 		830D277F163E13A70045F28B /* DejaVuSans.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 830D277D163E13A70045F28B /* DejaVuSans.ttf */; };
@@ -48,6 +49,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        ED1700010000000000000002 /* editor.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = editor.c; path = ../../../editor.c; sourceTree = SOURCE_ROOT; };
+        ED1700010000000000000003 /* editor.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = editor.h; path = ../../../editor.h; sourceTree = SOURCE_ROOT; };
 		002F3A2B09D0888800EBEB88 /* SDLMain.h */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.h; path = SDLMain.h; sourceTree = SOURCE_ROOT; };
 		002F3A2C09D0888800EBEB88 /* SDLMain.m */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.objc; path = SDLMain.m; sourceTree = SOURCE_ROOT; };
 		089C165DFE840E0CC02AAC07 /* English */ = {isa = PBXFileReference; fileEncoding = 10; lastKnownFileType = text.plist.strings; name = English; path = English.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -156,6 +159,8 @@
 				8367E2D516342BEF00E0C1C1 /* about.c */,
 				35DEA5081A36F3FD0085CFB3 /* gui.h */,
 				83961D1C162C9C7A00B4B9E0 /* gui.c */,
+                ED1700010000000000000002 /* editor.c */,
+                ED1700010000000000000003 /* editor.h */,
 				8367E2E516342CC500E0C1C1 /* replay.h */,
 				83961D1F162C9C7A00B4B9E0 /* replay.c */,
 				35DEA5091A3701030085CFB3 /* undo.h */,
@@ -296,6 +301,7 @@
 			files = (
 				002F3A2E09D0888800EBEB88 /* SDLMain.m in Sources */,
 				83961D27162C9C7A00B4B9E0 /* gui.c in Sources */,
+                ED1700010000000000000001 /* editor.c in Sources */,
 				83961D29162C9C7A00B4B9E0 /* replay.c in Sources */,
 				83961D2A162C9C7A00B4B9E0 /* undo.c in Sources */,
 				83961D2B162C9C7A00B4B9E0 /* util.c in Sources */,
